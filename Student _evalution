@@ -1,0 +1,205 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import accuracy_score
+import tkinter as tk
+import tkinter.messagebox as messagebox
+import speech_recognition as sr
+import threading
+import pyaudio
+import wave
+import os
+
+# Load the CSV file
+df = pd.read_csv('D:/Question,Answer.csv')
+
+class QuizApp(tk.Tk):
+    def _init_(self):
+        super()._init_()
+        self.title("Student Evaluation Model")
+
+        # Initialize attributes before calling methods that use them
+        self.current_question = 0
+        self.correct_answers = df['Answer'].tolist()
+        self.user_answers = [""] * len(df['Question'])
+        self.correct_status = [""] * len(df['Question'])
+        self.audio_file_path = "recorded_audio.wav"
+        self.recording = False
+        
+        self.configure_gui()
+        self.create_widgets()
+        
+    def configure_gui(self):
+        self.geometry("500x450")
+        self.configure(bg="#f0f0f0")
+        
+    def create_widgets(self):
+        self.label_title = tk.Label(self, text="Student Evaluation Model", font=("Helvetica", 14), bg="#f0f0f0")
+        self.label_title.pack(pady=5)
+        
+        self.question_list_label = tk.Label(self, text="Select a question to answer:", bg="#f0f0f0", font=("Helvetica", 12))
+        self.question_list_label.pack(pady=5)
+        
+        self.question_listbox = tk.Listbox(self, height=10, width=70)
+        for i, question in enumerate(df['Question']):
+            self.question_listbox.insert(tk.END, f"{i+1}. {question}")
+        self.question_listbox.pack(pady=5)
+        
+        self.select_button = tk.Button(self, text="Select Question", command=self.select_question, bg="#3498DB", fg="white", font=("Helvetica", 10))
+        self.select_button.pack(pady=5)
+        
+        self.question_label = tk.Label(self, text="", wraplength=450, bg="#f0f0f0", font=("Helvetica", 12))
+        self.question_label.pack(pady=5)
+        
+        self.record_button = tk.Button(self, text="Start Recording Answer", command=self.start_recording, bg="#4CAF50", fg="white", font=("Helvetica", 10))
+        self.record_button.pack(pady=5, ipadx=5, ipady=3)
+        self.record_button.config(state=tk.DISABLED)
+        
+        self.stop_button = tk.Button(self, text="Stop Recording", command=self.stop_recording, state=tk.DISABLED, bg="#FF5733", fg="white", font=("Helvetica", 10))
+        self.stop_button.pack(pady=5, ipadx=5, ipady=3)
+        
+        self.submit_button = tk.Button(self, text="Submit Answer", command=self.submit_answer, state=tk.DISABLED, bg="#FFC300", fg="white", font=("Helvetica", 10))
+        self.submit_button.pack(pady=5, ipadx=5, ipady=3)
+        
+        self.previous_button = tk.Button(self, text="Previous Question", command=self.previous_question, bg="#3498DB", fg="white", font=("Helvetica", 10))
+        self.previous_button.pack(side=tk.LEFT, padx=15, pady=5)
+        
+        self.next_button = tk.Button(self, text="Next Question", command=self.next_question, bg="#3498DB", fg="white", font=("Helvetica", 10))
+        self.next_button.pack(side=tk.RIGHT, padx=15, pady=5)
+        
+        self.result_label = tk.Label(self, text="", wraplength=450, bg="#f0f0f0", font=("Helvetica", 12))
+        self.result_label.pack(pady=5)
+        
+        self.accuracy_label = tk.Label(self, text="", bg="#f0f0f0", font=("Helvetica", 12))
+        self.accuracy_label.pack(pady=5)
+        
+        self.transcribed_text_label = tk.Label(self, text="", wraplength=450, bg="#f0f0f0", font=("Helvetica", 12))
+        self.transcribed_text_label.pack(pady=5)
+        
+    def select_question(self):
+        try:
+            self.current_question = self.question_listbox.curselection()[0]
+            self.update_question()
+        except IndexError:
+            messagebox.showwarning("Selection Error", "Please select a question first.")
+        
+    def start_recording(self):
+        self.recording = True
+        self.record_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.submit_button.config(state=tk.DISABLED)
+        
+        self.audio = pyaudio.PyAudio()
+        self.stream = self.audio.open(format=pyaudio.paInt16, channels=1, rate=44100, input=True, frames_per_buffer=1024)
+        self.frames = []
+        self.recording_thread = threading.Thread(target=self.record)
+        self.recording_thread.start()
+
+    def record(self):
+        while self.recording:
+            data = self.stream.read(1024)
+            self.frames.append(data)
+
+    def stop_recording(self):
+        self.recording = False
+        self.stream.stop_stream()
+        self.stream.close()
+        self.audio.terminate()
+        
+        wf = wave.open(self.audio_file_path, 'wb')
+        wf.setnchannels(1)
+        wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
+        wf.setframerate(44100)
+        wf.writeframes(b''.join(self.frames))
+        wf.close()
+
+        self.record_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        self.submit_button.config(state=tk.NORMAL)
+        
+    def convert_audio_to_text(self):
+        r = sr.Recognizer()
+        with sr.AudioFile(self.audio_file_path) as source:
+            audio_data = r.record(source)
+            try:
+                text = r.recognize_google(audio_data)
+                return text
+            except sr.UnknownValueError:
+                messagebox.showwarning("Speech to Text", "Could not understand the audio")
+                return ""
+            except sr.RequestError as e:
+                messagebox.showerror("Speech to Text", f"Error occurred: {e}")
+                return ""
+
+    def submit_answer(self):
+        user_answer = self.convert_audio_to_text()
+        if not user_answer:
+            return
+        
+        self.user_answers[self.current_question] = user_answer
+        self.transcribed_text_label.config(text=f"Transcribed Text: {user_answer}")
+        
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform([self.correct_answers[self.current_question], user_answer])
+        
+        similarity = cosine_similarity(tfidf_matrix)[0, 1]
+        
+        # Determine if the answer is correct based on similarity threshold
+        threshold = 0.7  # Adjust as needed
+        is_correct = similarity >= threshold
+        
+        if is_correct:
+            self.correct_status[self.current_question] = "Yes"
+        else:
+            self.correct_status[self.current_question] = "No"
+        
+        # Calculate accuracy
+        answered_questions = [status for status in self.correct_status if status != ""]
+        accuracy = accuracy_score(["Yes"] * len(answered_questions), answered_questions)
+        
+        # Show result based on accuracy
+        if is_correct:
+            self.result_label.config(text="Correct answer")
+        else:
+            self.result_label.config(text="Incorrect answer")
+        
+        self.accuracy_label.config(text=f"Accuracy: {accuracy * 100:.2f}%")
+
+    def next_question(self):
+        if self.current_question < len(df['Question']) - 1:
+            self.current_question += 1
+            self.update_question()
+
+    def previous_question(self):
+        if self.current_question > 0:
+            self.current_question -= 1
+            self.update_question()
+
+    def update_question(self):
+        self.question_label.config(text=df['Question'][self.current_question])
+        self.result_label.config(text="")
+        self.accuracy_label.config(text="")
+        self.transcribed_text_label.config(text="")
+        self.record_button.config(state=tk.NORMAL)
+        self.submit_button.config(state=tk.DISABLED)
+        self.question_listbox.selection_clear(0, tk.END)
+        self.question_listbox.selection_set(self.current_question)
+        self.question_listbox.see(self.current_question)
+        
+    def show_results(self):
+        result_text = "\nResults:\n"
+        for i in range(len(self.correct_answers)):
+            result_text += f"Question: {df['Question'][i]}\n"
+            result_text += f"Expected Answer: {self.correct_answers[i]}\n"
+            result_text += f"Your Answer: {self.user_answers[i]}\n"
+            result_text += f"Correct: {self.correct_status[i]}\n\n"
+        answered_questions = [status for status in self.correct_status if status != ""]
+        accuracy = accuracy_score(["Yes"] * len(answered_questions), answered_questions)
+        result_text += f"Accuracy: {accuracy * 100:.2f}%"
+        
+        messagebox.showinfo("Quiz Results", result_text)
+        self.quit()
+
+if __name__ == "__main__":
+    app = QuizApp()
+    app.mainloop()
